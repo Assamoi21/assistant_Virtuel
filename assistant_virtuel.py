@@ -1,138 +1,227 @@
-import pyttsx3  # pip install pyttsx3
-import speech_recognition as sr  # pip install speechRecognition
+import pyttsx3           # pip install pyttsx3
+import speech_recognition as sr  # pip install SpeechRecognition
 import datetime
-import wikipedia  # pip install wikipedia
+import wikipedia           # pip install wikipedia
 import webbrowser
 import os
 import smtplib
-# pip install PyAudio
+import requests            # pip install requests
+from dotenv import load_dotenv  # pip install python-dotenv
 
+load_dotenv()
 
+# --- Configuration depuis .env ---
+EMAIL_ADDRESS      = os.getenv("EMAIL_ADDRESS")
+EMAIL_PASSWORD     = os.getenv("EMAIL_PASSWORD")
+EMAIL_DESTINATAIRE = os.getenv("EMAIL_DESTINATAIRE")
+MUSIC_DIR          = os.getenv("MUSIC_DIR", "C:\\Users\\Public\\Music")
+WEATHER_API_KEY    = os.getenv("WEATHER_API_KEY")
+WEATHER_CITY       = os.getenv("WEATHER_CITY", "Paris")
 
+# --- Sites web ouverts par commande vocale ---
+SITES = {
+    'youtube':        'https://youtube.com',
+    'google':         'https://google.com',
+    'facebook':       'https://facebook.com',
+    'stack overflow': 'https://stackoverflow.com',
+    'github':         'https://github.com',
+    'gmail':          'https://mail.google.com',
+}
 
+# --- Initialisation de la voix ---
 engine = pyttsx3.init('sapi5')
 voices = engine.getProperty('voices')
-# print(voices[1].id)
-engine.setProperty('voice', voices[0].id)#voice[0]-male voice[1]-female
+engine.setProperty('voice', voices[0].id)  # voices[0]=homme, voices[1]=femme
+engine.setProperty('rate', 170)
 
 
 def speak(audio):
+    print(f"Assistant : {audio}")
     engine.say(audio)
     engine.runAndWait()
 
 
 def wishMe():
-    hour = int(datetime.datetime.now().hour)
-    if hour >= 0 and hour < 12:
-        speak("Good Morning!")
-
-    elif hour >= 12 and hour < 18:
-        speak("Good Afternoon!")
-
+    hour = datetime.datetime.now().hour
+    if hour < 12:
+        speak("Bonjour !")
+    elif hour < 18:
+        speak("Bon après-midi !")
     else:
-        speak("Good Evening!")
-
-    speak("I am VA Sir. Please tell me how may I help you")
+        speak("Bonsoir !")
+    speak("Je suis votre assistant virtuel. Comment puis-je vous aider ?")
 
 
 def takeCommand():
-    # It takes microphone input from the user and returns string output
-
     r = sr.Recognizer()
     with sr.Microphone() as source:
-        print("Listening...")
+        print("Écoute en cours...")
         r.pause_threshold = 1
+        r.adjust_for_ambient_noise(source, duration=0.5)
         audio = r.listen(source)
 
     try:
-        print("Recognizing...")
-        query = r.recognize_google(audio, language='en-in')
-        print(f"User said: {query}\n")
-
-    except Exception as e:
-        # print(e)
-        print("Say that again please...")
-        return "None"
+        print("Reconnaissance en cours...")
+        query = r.recognize_google(audio, language='fr-FR')
+        print(f"Vous avez dit : {query}\n")
+    except sr.UnknownValueError:
+        print("Je n'ai pas compris, répétez s'il vous plaît...")
+        return "none"
+    except sr.RequestError:
+        speak("Erreur de connexion au service de reconnaissance vocale.")
+        return "none"
     return query
 
 
+def get_weather(city):
+    if not WEATHER_API_KEY:
+        return "Clé API météo non configurée dans le fichier .env"
+    try:
+        url = (
+            f"https://api.openweathermap.org/data/2.5/weather"
+            f"?q={city}&appid={WEATHER_API_KEY}&units=metric&lang=fr"
+        )
+        data = requests.get(url, timeout=5).json()
+        if data.get("cod") != 200:
+            return f"Ville introuvable : {city}"
+        desc  = data['weather'][0]['description']
+        temp  = data['main']['temp']
+        feels = data['main']['feels_like']
+        return f"{city} : {desc}, {temp}°C, ressenti {feels}°C"
+    except Exception as e:
+        return f"Impossible d'obtenir la météo : {e}"
+
+
 def sendEmail(to, content):
+    if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
+        raise ValueError("Identifiants email manquants dans le fichier .env")
     server = smtplib.SMTP('smtp.gmail.com', 587)
     server.ehlo()
     server.starttls()
-    server.login("from_mail_id", "password")
-    server.sendmail("from_mail_id", to, content)
-    server.close()    
+    server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+    server.sendmail(EMAIL_ADDRESS, to, content)
+    server.close()
+
+
+def open_site(query):
+    for site, url in SITES.items():
+        if f'ouvre {site}' in query or f'open {site}' in query:
+            webbrowser.open(url)
+            speak(f"J'ouvre {site}")
+            return True
+    return False
+
 
 if __name__ == "__main__":
     wishMe()
+
     while True:
-        # if 1:
         query = takeCommand().lower()
 
-        # Logic for executing tasks based on query
-        if 'wikipedia' in query:
+        if query == "none":
+            continue
+
+        # --- Quitter ---
+        if any(w in query for w in ['quitter', 'au revoir', 'stop', 'exit', 'quit']):
+            speak("Au revoir ! À bientôt.")
+            break
+
+        # --- Wikipedia ---
+        elif 'wikipedia' in query:
             try:
-                speak("Searching Wikipedia...")
-                query = query.replace("wikipedia", "").strip() 
-                if not query:
-                    speak("Please specify what you want to search on Wikipedia.")
+                speak("Je recherche sur Wikipedia...")
+                terme = query.replace("wikipedia", "").strip()
+                if not terme:
+                    speak("Précisez ce que vous voulez rechercher sur Wikipedia.")
                 else:
-                    results = wikipedia.summary(query, sentences=2)
-                    speak("According to Wikipedia")
+                    wikipedia.set_lang("fr")
+                    results = wikipedia.summary(terme, sentences=2)
+                    speak("Selon Wikipedia :")
                     print(results)
                     speak(results)
-            except wikipedia.exceptions.DisambiguationError as e:
-                speak("Your query is too broad. Please be more specific.")
+            except wikipedia.exceptions.DisambiguationError:
+                speak("Votre recherche est trop vague. Soyez plus précis.")
             except wikipedia.exceptions.PageError:
-                speak("I could not find any results for your query.")
+                speak("Aucun résultat trouvé pour votre recherche.")
             except Exception as e:
                 print(e)
-                speak("An error occurred while searching Wikipedia.")
+                speak("Une erreur s'est produite lors de la recherche.")
 
+        # --- Recherche Google ---
+        elif 'recherche' in query or 'cherche' in query:
+            terme = query.replace('recherche', '').replace('cherche', '').strip()
+            if terme:
+                webbrowser.open(f"https://google.com/search?q={terme}")
+                speak(f"Je recherche {terme} sur Google.")
+            else:
+                speak("Que voulez-vous rechercher ?")
 
-        elif 'open youtube' in query:
-            webbrowser.open("youtube.com")
+        # --- Ouvrir un site ---
+        elif 'ouvre' in query or 'open' in query:
+            if not open_site(query):
+                speak("Je ne connais pas ce site.")
 
-        elif 'open google' in query:
-            webbrowser.open("google.com")
+        # --- Musique ---
+        elif 'musique' in query or 'music' in query:
+            if os.path.isdir(MUSIC_DIR):
+                songs = [f for f in os.listdir(MUSIC_DIR) if f.endswith(('.mp3', '.wav'))]
+                if songs:
+                    os.startfile(os.path.join(MUSIC_DIR, songs[0]))
+                    speak(f"Je lance {songs[0]}")
+                else:
+                    speak("Aucun fichier musical trouvé dans le dossier.")
+            else:
+                speak("Le dossier musique est introuvable. Vérifiez le fichier .env")
 
-        elif 'open stack overflow' in query:
-            webbrowser.open("stackoverflow.com")
+        # --- Heure ---
+        elif 'heure' in query or 'time' in query:
+            heure = datetime.datetime.now().strftime("%H heures %M")
+            speak(f"Il est {heure}.")
 
-        elif 'open facebook' in query:
-            webbrowser.open("facebook.com")
+        # --- Date ---
+        elif 'date' in query or 'jour' in query:
+            jours = ['lundi','mardi','mercredi','jeudi','vendredi','samedi','dimanche']
+            mois  = ['janvier','février','mars','avril','mai','juin',
+                     'juillet','août','septembre','octobre','novembre','décembre']
+            now   = datetime.datetime.now()
+            date_str = f"{jours[now.weekday()]} {now.day} {mois[now.month - 1]} {now.year}"
+            speak(f"Nous sommes le {date_str}.")
 
+        # --- Météo ---
+        elif 'météo' in query or 'meteo' in query or 'temps' in query:
+            ville = WEATHER_CITY
+            # Permet de demander la météo d'une ville précise : "météo à Lyon"
+            for mot in ['à', 'a', 'de', 'pour']:
+                if f' {mot} ' in query:
+                    ville = query.split(f' {mot} ')[-1].strip()
+                    break
+            resultat = get_weather(ville)
+            speak(resultat)
 
-        elif 'play music' in query:
-            music_dir = 'E:\music' # your music playlist location path
-            songs = os.listdir(music_dir)
-            print(songs)
-            os.startfile(os.path.join(music_dir, songs[0]))
-
-        elif 'time' in query:
-            strTime = datetime.datetime.now().strftime("%H:%M:%S")
-            speak(f"Sir, the time is {strTime}")
-
-        elif 'open code' in query:
-            codePath = "E:\\code_opencv" #your code loaction
-            os.startfile(codePath)
-            
-        elif 'open photo' in query:
-            photoPath = "E:\\DISK_E\\photo_name" # your photo loaction
-            os.startfile(photoPath)
-
-            
-
-        elif 'email to friend' in query:
+        # --- Email ---
+        elif 'email' in query or 'mail' in query:
             try:
-                speak("What should I say?")
+                speak("Que dois-je dire dans cet email ?")
                 content = takeCommand()
-                to = "To_mail_id" #for example :email@gmail.com
-                sendEmail(to, content)
-                speak("Email has been sent!")
+                sendEmail(EMAIL_DESTINATAIRE, content)
+                speak("L'email a été envoyé avec succès !")
             except Exception as e:
                 print(e)
-                speak("Sorry. I am not able to send this email")
-                
-        
+                speak("Désolé, je n'ai pas pu envoyer cet email.")
+
+        # --- Aide ---
+        elif 'aide' in query or 'help' in query or 'commandes' in query:
+            aide = (
+                "Voici ce que je sais faire : "
+                "rechercher sur Wikipedia, "
+                "ouvrir YouTube, Google, Facebook, GitHub, Stack Overflow, Gmail, "
+                "lancer de la musique, "
+                "donner l'heure et la date, "
+                "afficher la météo, "
+                "envoyer un email, "
+                "et faire une recherche Google."
+            )
+            speak(aide)
+
+        else:
+            speak("Je n'ai pas compris. Dites 'aide' pour connaître les commandes disponibles.")
